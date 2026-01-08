@@ -157,46 +157,14 @@ sequenceDiagram
 • **RDS**: PostgreSQL in private subnets, only accessible from APP-SG
 • **Security**: Multi-layered security groups control all traffic
 
-### Detailed Architecture with VPC and Security
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                  Internet                                    │
-└───────────────────────────────────────┬─────────────────────────────────────┘
-                                        │
-                              ┌─────────▼──────────┐
-                              │  Internet Gateway  │
-                              └─────────┬──────────┘
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  VPC (10.0.0.0/16)                    │                                      │
-│                                       │                                      │
-│  ┌────────────────────────────────────┼──────────────────────────────────┐  │
-│  │  Public Route Table                │                                  │  │
-│  │  Destination: 0.0.0.0/0 → Internet Gateway                            │  │
-│  └────────────────────────────────────┼──────────────────────────────────┘  │
-│                                       │                                      │
-│  ┌────────────────────────────────────▼──────────────────────────────────┐  │
-│  │                          ALB (aws-demo-alb)                            │  │
-│  │                      Security Group: ALB-SG                            │  │
-│  │                    Inbound: 80 (0.0.0.0/0), 443 (0.0.0.0/0)           │  │
-│  │                                                                        │  │
-│  │  Listener Rules:                                                      │  │
-│  │  • /api/* → Backend Target Group (port 8080)                         │  │
-│  │  • /*     → Frontend Target Group (port 80)                          │  │
-│  └────────────┬────────────────────────────────────┬────────────────────┘  │
-│               │                                    │                        │
-│  ┌────────────┼────────────────────────────────────┼────────────────────┐  │
-│  │ eu-west-1a │                                    │ eu-west-1b         │  │
-│  │            │                                    │                    │  │
-│  │  ┌─────────▼──────────┐              ┌─────────▼──────────┐         │  │
-│  │  │ Public Subnet 1    │              │ Public Subnet 2    │         │  │
-│  │  │ 10.0.1.0/24        │              │ 10.0.2.0/24        │         │  │
-│  │  │                    │              │                    │         │  │
-│  │  │ ┌────────────────┐ │              │ ┌────────────────┐ │         │  │
-│  │  │ │ EC2 Backend    │ │              │ │ EC2 Frontend   │ │         │  │
-│  │  │ │ Docker:8080    │ │              │ │ Nginx:80       │ │         │  │
-│  │  │ │ SG: APP-SG     │ │              │ │ SG: APP-SG     │ │         │  │
-│  │  │ │ IAM: ECR Access│ │              │ │ IAM: ECR Access│ │         │  │
-│  │  │ └────────┬───────┘ │              │ └────────────────┘ │         │  │
+**Key Components:**
+
+• **VPC**: Isolated network (10.0.0.0/16) with public and private subnets across 2 AZs
+• **ALB**: Routes `/api/*` to backend, everything else to frontend
+• **EC2 Instances**: Pull Docker images from ECR using IAM roles
+• **RDS**: PostgreSQL in private subnets, only accessible from APP-SG
+• **Security**: Multi-layered security groups control all traffic
+
 **Security Group Rules:**
 
 • **ALB-SG**: Allows HTTP (80) and HTTPS (443) from internet (0.0.0.0/0)
