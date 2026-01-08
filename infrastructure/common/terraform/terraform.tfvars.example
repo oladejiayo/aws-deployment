@@ -1,0 +1,6 @@
+aws_region   = "us-east-1"
+project_name = "aws-demo"
+environment  = "dev"
+db_username  = "postgres"
+db_password  = "YourSecurePassword123!"  # Change this!
+db_name      = "awsdemo"
