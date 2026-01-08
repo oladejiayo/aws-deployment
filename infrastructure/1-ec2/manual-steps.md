@@ -197,36 +197,6 @@ sequenceDiagram
 │  │  │ │ SG: APP-SG     │ │              │ │ SG: APP-SG     │ │         │  │
 │  │  │ │ IAM: ECR Access│ │              │ │ IAM: ECR Access│ │         │  │
 │  │  │ └────────┬───────┘ │              │ └────────────────┘ │         │  │
-│  │  │          │         │              │                    │         │  │
-│  │  └──────────┼─────────┘              └────────────────────┘         │  │
-│  │             │                                                        │  │
-│  │  ┌──────────▼─────────┐              ┌────────────────────┐         │  │
-│  │  │ Private Subnet 1   │              │ Private Subnet 2   │         │  │
-│  │  │ 10.0.10.0/24       │              │ 10.0.11.0/24       │         │  │
-│  │  │                    │              │                    │         │  │
-│  │  │ ┌────────────────┐ │              │                    │         │  │
-│  │  │ │ RDS PostgreSQL │◄┼──────────────┼────────────────────┘         │  │
-│  │  │ │ db.t3.micro    │ │              │                              │  │
-│  │  │ │ SG: RDS-SG     │ │              │                              │  │
-│  │  │ │ Port: 5432     │ │              │                              │  │
-│  │  │ │ Multi-AZ       │ │              │                              │  │
-│  │  │ └────────────────┘ │              │                              │  │
-│  │  └────────────────────┘              └──────────────────────────────┘  │
-│  └─────────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      External Services (AWS Managed)                         │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────┐           │
-│  │  Amazon ECR (Elastic Container Registry)                      │           │
-│  │  • aws-demo-backend:latest  (Spring Boot JAR in Docker)       │           │
-│  │  • aws-demo-frontend:latest (React build + Nginx in Docker)   │           │
-│  │                                                                │           │
-│  │  EC2 instances pull images via IAM role (no credentials)      │           │
-│  └──────────────────────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────────────────────┘
-
 **Security Group Rules:**
 
 • **ALB-SG**: Allows HTTP (80) and HTTPS (443) from internet (0.0.0.0/0)
@@ -238,7 +208,6 @@ sequenceDiagram
 2. ALB → Backend EC2:8080 (for /api/*) OR Frontend EC2:80 (for /*)
 3. Backend EC2 → RDS:5432 (database queries)
 4. EC2 instances pull Docker images from ECR using IAM role
-```
 
 ## Cost Estimate (eu-west-1)
 
