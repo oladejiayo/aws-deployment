@@ -191,13 +191,7 @@ sequenceDiagram
 • **Zero Downtime Deploys**: Blue/green deployments built-in
 • **Per-Request Pricing**: Pay for compute time + active instances + requests
 
-### Detailed Architecture with App Runner Services
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                               Internet Users                                 │
-└──────────────────┬───────────────────────────────────┬──────────────────────┘
-                   │                                   │
-**Key App Runner Concepts:**
+## Cost Estimate (us-east-1)
 
 • **Fully Managed**: No infrastructure management (serverless containers)
 • **Auto HTTPS**: SSL/TLS certificates provisioned automatically
