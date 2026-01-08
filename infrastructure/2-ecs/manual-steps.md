@@ -182,116 +182,11 @@ sequenceDiagram
 • **Target Type IP**: ALB routes directly to task IPs (not EC2 instance IPs)
 • **Auto-Scaling**: Based on CPU, memory, or custom CloudWatch metrics
 
-### Detailed Architecture with ECS Fargate and VPC
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                                  Internet                                    │
-└───────────────────────────────────────┬─────────────────────────────────────┘
-                                        │
-                              ┌─────────▼──────────┐
-                              │  Internet Gateway  │
-                              └─────────┬──────────┘
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  VPC (10.0.0.0/16)                    │                                      │
-│                                       │                                      │
-│  ┌────────────────────────────────────▼──────────────────────────────────┐  │
-│  │                          ALB (aws-demo-ecs-alb)                        │  │
-│  │                      Security Group: ALB-SG                            │  │
-│  │                    Inbound: 80 (0.0.0.0/0), 443 (0.0.0.0/0)           │  │
-│  │                                                                        │  │
-│  │  Target Groups (Type: IP):                                            │  │
-│  │  • Backend TG  → Port 8080, Health: /api/messages                     │  │
-│  │  • Frontend TG → Port 80, Health: /                                   │  │
-│  └────────────┬────────────────────────────────────┬────────────────────┘  │
-│               │                                    │                        │
-│  ┌────────────┼────────────────────────────────────┼────────────────────┐  │
-│  │            │        ECS Cluster: aws-demo       │                    │  │
-│  │            │                                    │                    │  │
-│  │  ┌─────────▼─────────────────┐      ┌─────────▼────────────────┐   │  │
-│  │  │   ECS Service: Backend    │      │  ECS Service: Frontend   │   │  │
-│  │  │   Desired: 2 tasks        │      │  Desired: 2 tasks        │   │  │
-│  │  │   Launch Type: Fargate    │      │  Launch Type: Fargate    │   │  │
-│  │  │   Security Group: APP-SG  │      │  Security Group: APP-SG  │   │  │
-│  │  └───────────┬───────────────┘      └──────────────────────────┘   │  │
-│  │              │                                                       │  │
-│  │  ┌───────────┼───────────────────────────────────────────────────┐ │  │
-│  │  │ eu-west-1a│                              eu-west-1b            │ │  │
-│  │  │           │                                                     │ │  │
-│  │  │  ┌────────▼─────────┐              ┌────────────────────┐     │ │  │
-│  │  │  │ Public Subnet 1  │              │ Public Subnet 2    │     │ │  │
-│  │  │  │ 10.0.1.0/24      │              │ 10.0.2.0/24        │     │ │  │
-│  │  │  │                  │              │                    │     │ │  │
-│  │  │  │ ┌──────────────┐ │              │ ┌──────────────┐  │     │ │  │
-│  │  │  │ │Fargate Task 1│ │              │ │Fargate Task 2│  │     │ │  │
-│  │  │  │ │Backend:8080  │ │              │ │Backend:8080  │  │     │ │  │
-│  │  │  │ │0.25vCPU,0.5GB│ │              │ │0.25vCPU,0.5GB│  │     │ │  │
-│  │  │  │ │ENI: Private IP│ │             │ │ENI: Private IP│  │     │ │  │
-│  │  │  │ └──────┬───────┘ │              │ └──────────────┘  │     │ │  │
-│  │  │  │        │         │              │                    │     │ │  │
-│  │  │  │ ┌──────▼───────┐ │              │ ┌──────────────┐  │     │ │  │
-│  │  │  │ │Fargate Task 1│ │              │ │Fargate Task 2│  │     │ │  │
-│  │  │  │ │Frontend:80   │ │              │ │Frontend:80   │  │     │ │  │
-│  │  │  │ │0.25vCPU,0.5GB│ │              │ │0.25vCPU,0.5GB│  │     │ │  │
-│  │  │  │ │ENI: Private IP│ │             │ │ENI: Private IP│  │     │ │  │
-│  │  │  │ └──────────────┘ │              │ └──────────────┘  │     │ │  │
-│  │  │  └──────────────────┘              └────────────────────┘     │ │  │
-│  │  │                                                                │ │  │
-│  │  │  ┌──────────────────┐              ┌────────────────────┐     │ │  │
-│  │  │  │ Private Subnet 1 │              │ Private Subnet 2   │     │ │  │
-│  │  │  │ 10.0.10.0/24     │              │ 10.0.11.0/24       │     │ │  │
-│  │  │  │                  │              │                    │     │ │  │
-│  │  │  │ ┌──────────────┐ │              │                    │     │ │  │
-│  │  │  │ │RDS PostgreSQL│◄┼──────────────┼────────────────────┘     │ │  │
-│  │  │  │ │db.t3.micro   │ │              │                          │ │  │
-│  │  │  │ │SG: RDS-SG    │ │  Fargate tasks access via ENI           │ │  │
-│  │  │  │ │Port: 5432    │ │                                          │ │  │
-│  │  │  │ └──────────────┘ │                                          │ │  │
-│  │  │  └──────────────────┘                                          │ │  │
-│  │  └────────────────────────────────────────────────────────────────┘ │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      External Services (AWS Managed)                         │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────┐           │
-│  │  Amazon ECR (Elastic Container Registry)                      │           │
-│  │  • aws-demo-backend:latest                                    │           │
-│  │  • aws-demo-frontend:latest                                   │           │
-│  │                                                                │           │
-│  │  ECS Task Definitions pull images from ECR                    │           │
-│  │  Task Execution Role grants ECR access automatically          │           │
-│  └──────────────────────────────────────────────────────────────┘           │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────┐           │
-│  │  ECS Control Plane (AWS Managed)                              │           │
-│  │  • Monitors task health                                       │           │
-│  │  • Auto-restarts failed tasks                                 │           │
-│  │  • Manages task scheduling and placement                      │           │
-│  │  • Integrates with ALB for service discovery                  │           │
-│  └──────────────────────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-**Key ECS Fargate Concepts:**
-
-• **Fargate**: Serverless compute - no EC2 instances to manage
-• **Task Definition**: Blueprint specifying container image, CPU, memory, env vars
-• **Service**: Maintains desired number of tasks, integrates with ALB
-• **ENI (Elastic Network Interface)**: Each task gets its own private IP in VPC
-• **Target Type: IP**: ALB routes directly to task IPs (not EC2 instance IPs)
-
 **Security Group Rules:**
 
 • **ALB-SG**: Allows HTTP (80) and HTTPS (443) from internet (0.0.0.0/0)
 • **APP-SG**: Allows 8080 from ALB-SG, 80 from ALB-SG
 • **RDS-SG**: Allows 5432 from APP-SG only
-
-**Traffic Flow:**
-1. User → ALB (port 80/443)
-2. ALB → Backend Fargate Task IPs:8080 OR Frontend Fargate Task IPs:80
-3. Backend Tasks → RDS:5432 via private networking
-4. ECS pulls images from ECR using Task Execution Role
-```
 
 ## Cost Estimate (us-east-1)
 
