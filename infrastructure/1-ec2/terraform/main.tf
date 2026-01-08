@@ -97,8 +97,9 @@ resource "aws_instance" "backend" {
   }
 }
 
-# Frontend EC2 Instance
+# Frontend EC2 Instance (only if frontend_deployment_type == "ec2")
 resource "aws_instance" "frontend" {
+  count                  = var.frontend_deployment_type == "ec2" ? 1 : 0
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
   key_name               = var.key_name
@@ -114,6 +115,129 @@ resource "aws_instance" "frontend" {
 
   tags = {
     Name = "${var.project_name}-frontend"
+  }
+}
+
+# =============================================================================
+# S3 + CloudFront (only if frontend_deployment_type == "s3_cloudfront")
+# =============================================================================
+
+# S3 Bucket for Static Website Hosting
+resource "aws_s3_bucket" "frontend" {
+  count  = var.frontend_deployment_type == "s3_cloudfront" ? 1 : 0
+  bucket = "${var.project_name}-frontend-${data.aws_caller_identity.current.account_id}"
+
+  tags = {
+    Name = "${var.project_name}-frontend"
+  }
+}
+
+# Enable versioning
+resource "aws_s3_bucket_versioning" "frontend" {
+  count  = var.frontend_deployment_type == "s3_cloudfront" ? 1 : 0
+  bucket = aws_s3_bucket.frontend[0].id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Block public access (CloudFront will access via OAI)
+resource "aws_s3_bucket_public_access_block" "frontend" {
+  count  = var.frontend_deployment_type == "s3_cloudfront" ? 1 : 0
+  bucket = aws_s3_bucket.frontend[0].id
+
+  block_public_acls       = true
+  block_public_policy     = false
+  ignore_public_acls      = true
+  restrict_public_buckets = false
+}
+
+# CloudFront Origin Access Identity
+resource "aws_cloudfront_origin_access_identity" "frontend" {
+  count   = var.frontend_deployment_type == "s3_cloudfront" ? 1 : 0
+  comment = "OAI for ${var.project_name} frontend"
+}
+
+# S3 Bucket Policy for CloudFront
+resource "aws_s3_bucket_policy" "frontend" {
+  count  = var.frontend_deployment_type == "s3_cloudfront" ? 1 : 0
+  bucket = aws_s3_bucket.frontend[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontOAI"
+        Effect = "Allow"
+        Principal = {
+          AWS = aws_cloudfront_origin_access_identity.frontend[0].iam_arn
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.frontend[0].arn}/*"
+      }
+    ]
+  })
+}
+
+# CloudFront Distribution
+resource "aws_cloudfront_distribution" "frontend" {
+  count   = var.frontend_deployment_type == "s3_cloudfront" ? 1 : 0
+  enabled = true
+  comment = "${var.project_name} frontend distribution"
+
+  origin {
+    domain_name = aws_s3_bucket.frontend[0].bucket_regional_domain_name
+    origin_id   = "S3-${aws_s3_bucket.frontend[0].id}"
+
+    s3_origin_config {
+      origin_access_identity = aws_cloudfront_origin_access_identity.frontend[0].cloudfront_access_identity_path
+    }
+  }
+
+  default_root_object = "index.html"
+
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-${aws_s3_bucket.frontend[0].id}"
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 86400   # 1 day
+    max_ttl                = 31536000 # 1 year
+    compress               = true
+  }
+
+  # Custom error response for SPA routing
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+    error_caching_min_ttl = 300
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  price_class = "PriceClass_100" # Use only North America and Europe edge locations
+
+  tags = {
+    Name = "${var.project_name}-frontend-cdn"
   }
 }
 
@@ -152,8 +276,9 @@ resource "aws_lb_target_group" "backend" {
   }
 }
 
-# Frontend Target Group
+# Frontend Target Group (only if frontend_deployment_type == "ec2")
 resource "aws_lb_target_group" "frontend" {
+  count    = var.frontend_deployment_type == "ec2" ? 1 : 0
   name     = "${var.project_name}-frontend-tg"
   port     = 80
   protocol = "HTTP"
@@ -180,8 +305,9 @@ resource "aws_lb_target_group_attachment" "backend" {
 }
 
 resource "aws_lb_target_group_attachment" "frontend" {
-  target_group_arn = aws_lb_target_group.frontend.arn
-  target_id        = aws_instance.frontend.id
+  count            = var.frontend_deployment_type == "ec2" ? 1 : 0
+  target_group_arn = aws_lb_target_group.frontend[0].arn
+  target_id        = aws_instance.frontend[0].id
   port             = 80
 }
 
@@ -191,9 +317,22 @@ resource "aws_lb_listener" "http" {
   port              = 80
   protocol          = "HTTP"
 
+  # Default action depends on frontend deployment type
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.frontend.arn
+    type = var.frontend_deployment_type == "ec2" ? "forward" : "fixed-response"
+
+    # For EC2: forward to frontend target group
+    target_group_arn = var.frontend_deployment_type == "ec2" ? aws_lb_target_group.frontend[0].arn : null
+
+    # For S3+CloudFront: return 404 (frontend is served by CloudFront)
+    dynamic "fixed_response" {
+      for_each = var.frontend_deployment_type == "s3_cloudfront" ? [1] : []
+      content {
+        content_type = "text/plain"
+        message_body = "Not Found - Use CloudFront URL for frontend"
+        status_code  = "404"
+      }
+    }
   }
 }
 

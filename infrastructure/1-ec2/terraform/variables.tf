@@ -21,6 +21,16 @@ variable "key_name" {
   type        = string
 }
 
+variable "frontend_deployment_type" {
+  description = "Frontend deployment type: 'ec2' or 's3_cloudfront'"
+  type        = string
+  default     = "s3_cloudfront"
+  validation {
+    condition     = contains(["ec2", "s3_cloudfront"], var.frontend_deployment_type)
+    error_message = "frontend_deployment_type must be either 'ec2' or 's3_cloudfront'."
+  }
+}
+
 variable "db_username" {
   description = "Database username"
   type        = string

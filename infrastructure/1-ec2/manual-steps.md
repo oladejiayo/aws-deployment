@@ -4,13 +4,28 @@
 
 This option deploys the application on EC2 instances with:
 - **Backend**: EC2 instance running Docker container
-- **Frontend**: EC2 instance with Nginx serving static files OR S3 + CloudFront
+- **Frontend**: **Choose one of two options:**
+  - **Option A**: EC2 instance with Nginx serving static files (simpler, all in EC2)
+  - **Option B**: S3 + CloudFront (serverless frontend, better performance, lower cost)
 - **Database**: RDS PostgreSQL
 - **Load Balancer**: Application Load Balancer (ALB)
 
+### Which Frontend Option Should You Choose?
+
+| Criteria | EC2 + Nginx | S3 + CloudFront |
+|----------|-------------|------------------|
+| **Cost** | ~$8.50/month | ~$1-2/month |
+| **Performance** | Good | Excellent (global CDN) |
+| **Scalability** | Limited to instance size | Auto-scales globally |
+| **Maintenance** | Manage EC2 instance | Fully managed |
+| **Setup Complexity** | Simpler | Slightly more steps |
+| **Best For** | Learning EC2, simple apps | Production, global users |
+
+**Recommendation**: Use **S3 + CloudFront** for production workloads. Use **EC2 + Nginx** for learning or if you need custom server-side logic.
+
 ## Architecture
 
-### High-Level Overview
+### High-Level Overview - Option A: EC2 Frontend
 
 ```mermaid
 graph TB
@@ -32,7 +47,32 @@ graph TB
     style RDS fill:#f3e5f5
 ```
 
-### Detailed Architecture with VPC and Security
+### High-Level Overview - Option B: S3 + CloudFront Frontend
+
+```mermaid
+graph TB
+    Internet[🌐 Internet]
+    CF[☁️ CloudFront CDN<br/>Global Edge Locations]
+    S3[🪣 S3 Bucket<br/>Static Files]
+    ALB[⚖️ Application Load Balancer<br/>Port 80/443]
+    Backend[🖥️ EC2 Backend<br/>Spring Boot:8080]
+    RDS[(🗄️ RDS PostgreSQL<br/>Port 5432)]
+    
+    Internet -->|HTML/JS/CSS| CF
+    CF --> S3
+    Internet -->|/api/*| ALB
+    ALB --> Backend
+    Backend --> RDS
+    
+    style Internet fill:#e1f5ff
+    style CF fill:#fff4e1
+    style S3 fill:#e8f5e9
+    style ALB fill:#fff4e1
+    style Backend fill:#e8f5e9
+    style RDS fill:#f3e5f5
+```
+
+### Detailed Architecture - Option A: EC2 Frontend
 
 ```mermaid
 graph TB
@@ -89,6 +129,64 @@ graph TB
     style PubSub2 fill:#c8e6c9
     style PrivSub1 fill:#ffcdd2
     style PrivSub2 fill:#ffcdd2
+    style External fill:#f3e5f5
+```
+
+### Detailed Architecture - Option B: S3 + CloudFront Frontend
+
+```mermaid
+graph TB
+    subgraph Internet
+        Users[👥 Users]
+    end
+    
+    subgraph Global["🌍 Global AWS Services"]
+        CF[☁️ CloudFront<br/>Distribution<br/>Edge Locations Worldwide]
+        S3[🪣 S3 Bucket<br/>Origin<br/>• index.html<br/>• assets/*.js<br/>• assets/*.css]
+    end
+    
+    IGW[🌐 Internet Gateway]
+    
+    subgraph VPC["🏢 VPC (10.0.0.0/16)"]
+        ALB[⚖️ ALB<br/>Security Group: ALB-SG<br/>Inbound: 80, 443 from 0.0.0.0/0]
+        
+        subgraph AZ1["🏗️ Availability Zone: eu-west-1a"]
+            subgraph PubSub1["Public Subnet<br/>10.0.1.0/24"]
+                Backend[🖥️ EC2 Backend<br/>Docker:8080<br/>SG: APP-SG<br/>IAM: ECR Access]
+            end
+            
+            subgraph PrivSub1["🔒 Private Subnet<br/>10.0.10.0/24"]
+                RDS1[(🗄️ RDS PostgreSQL<br/>db.t3.micro<br/>SG: RDS-SG<br/>Port: 5432)]
+            end
+        end
+        
+        subgraph AZ2["🏗️ Availability Zone: eu-west-1b"]
+            subgraph PrivSub2["🔒 Private Subnet<br/>10.0.11.0/24"]
+                RDS2[(Standby)]
+            end
+        end
+    end
+    
+    subgraph External["☁️ AWS Managed Services"]
+        ECR[📦 Amazon ECR<br/>• backend:latest]
+    end
+    
+    Users -->|HTML/JS/CSS| CF
+    CF --> S3
+    Users -->|/api/*| IGW
+    IGW --> ALB
+    ALB -->|Target Group<br/>Port 8080| Backend
+    Backend --> RDS1
+    RDS1 -.->|Multi-AZ<br/>Replication| RDS2
+    Backend -.->|Pull Image| ECR
+    
+    style VPC fill:#e3f2fd
+    style AZ1 fill:#fff3e0
+    style AZ2 fill:#fff3e0
+    style PubSub1 fill:#c8e6c9
+    style PrivSub1 fill:#ffcdd2
+    style PrivSub2 fill:#ffcdd2
+    style Global fill:#fff4e1
     style External fill:#f3e5f5
 ```
 
@@ -179,13 +277,29 @@ sequenceDiagram
 
 ## Cost Estimate (eu-west-1)
 
+### Option A: EC2 Frontend
+
 | Resource | Type | Monthly Cost |
-|----------|------|--------------|
+|----------|------|--------------||
 | EC2 Backend | t3.micro | ~$8.50 |
 | EC2 Frontend | t3.micro | ~$8.50 |
 | RDS PostgreSQL | db.t3.micro | ~$13 |
 | ALB | - | ~$16 |
 | **Total** | | **~$46/month** |
+
+### Option B: S3 + CloudFront Frontend
+
+| Resource | Type | Monthly Cost |
+|----------|------|--------------||
+| EC2 Backend | t3.micro | ~$8.50 |
+| S3 Storage | Standard | ~$0.50 (for 20GB) |
+| S3 Requests | GET/PUT | ~$0.05 (10k requests) |
+| CloudFront | Data Transfer | ~$1.00 (10GB out) |
+| RDS PostgreSQL | db.t3.micro | ~$13 |
+| ALB | - | ~$16 |
+| **Total** | | **~$39/month** |
+
+💰 **Savings**: ~$7/month (~15%) by using S3 + CloudFront instead of EC2 for frontend
 
 ---
 
@@ -704,11 +818,19 @@ export BACKEND_INSTANCE_ID=i-xxxxx
 
 ---
 
-## Step 8: Launch Frontend EC2 Instance
+## Step 8: Deploy Frontend
+
+> **Choose ONE of the two options below:**
+> - **Option A**: EC2 with Nginx (simpler, all-in-EC2 architecture)
+> - **Option B**: S3 + CloudFront (recommended for production)
+
+---
+
+### Option A: EC2 Frontend Deployment
 
 > **Similar to backend, but for the React/Nginx frontend**
 
-### 8.1 Create Frontend User Data Script
+#### 8A.1 Create Frontend User Data Script
 
 ```bash
 cat > frontend-userdata.sh << EOF
@@ -732,7 +854,7 @@ docker run -d \
 EOF
 ```
 
-### 8.2 Launch the Frontend Instance
+#### 8A.2 Launch the Frontend Instance
 
 ```bash
 # Launch in a different subnet (AZ) for high availability
@@ -749,6 +871,263 @@ aws ec2 run-instances \
 # ⚠️ IMPORTANT: Copy the InstanceId
 export FRONTEND_INSTANCE_ID=i-xxxxx
 ```
+
+**✅ If you chose Option A, skip to [Step 9: Create Application Load Balancer](#step-9-create-application-load-balancer)**
+
+---
+
+### Option B: S3 + CloudFront Frontend Deployment
+
+> **Why S3 + CloudFront?**
+> - **Cost**: ~$1-2/month vs $8.50/month for EC2
+> - **Performance**: Global CDN with edge caching
+> - **Scalability**: Handles traffic spikes automatically
+> - **Reliability**: 99.99% uptime SLA
+> - **No Server Management**: Fully managed by AWS
+
+#### 8B.1 Build the Frontend
+
+```bash
+# Navigate to frontend directory
+cd ../../frontend
+
+# Update the API URL to point to the ALB (we'll update this after creating ALB)
+# For now, we'll use a placeholder and update it later
+cat > .env.production << 'EOF'
+VITE_API_URL=http://PLACEHOLDER-ALB-URL
+EOF
+
+# Install dependencies and build
+npm install
+npm run build
+
+# The build output is in frontend/dist/
+ls -la dist/
+```
+
+#### 8B.2 Create S3 Bucket for Static Hosting
+
+```bash
+# Navigate back to infrastructure directory
+cd ../infrastructure/1-ec2
+
+# Create a unique bucket name (S3 bucket names must be globally unique)
+BUCKET_NAME="aws-demo-frontend-$(date +%s)"
+echo "Bucket name: $BUCKET_NAME"
+export BUCKET_NAME
+
+# Create the S3 bucket
+aws s3api create-bucket \
+  --bucket $BUCKET_NAME \
+  --region eu-west-1 \
+  --create-bucket-configuration LocationConstraint=eu-west-1
+
+# Block public access at the bucket level (CloudFront will access via OAI)
+aws s3api put-public-access-block \
+  --bucket $BUCKET_NAME \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+
+# Enable versioning (best practice for production)
+aws s3api put-bucket-versioning \
+  --bucket $BUCKET_NAME \
+  --versioning-configuration Status=Enabled
+```
+
+#### 8B.3 Upload Frontend Files to S3
+
+```bash
+# Sync the built frontend to S3
+aws s3 sync ../../frontend/dist/ s3://$BUCKET_NAME/ \
+  --delete \
+  --cache-control "public, max-age=31536000" \
+  --exclude "index.html"
+
+# Upload index.html separately with no-cache (so users always get latest version)
+aws s3 cp ../../frontend/dist/index.html s3://$BUCKET_NAME/index.html \
+  --cache-control "no-cache, no-store, must-revalidate"
+
+# Verify files were uploaded
+aws s3 ls s3://$BUCKET_NAME/ --recursive
+```
+
+#### 8B.4 Create CloudFront Origin Access Identity (OAI)
+
+> **What is OAI?**
+> Origin Access Identity allows CloudFront to access S3 bucket contents without making the bucket public. Only CloudFront can read the files, not direct internet access.
+
+```bash
+# Create OAI
+OAI_OUTPUT=$(aws cloudfront create-cloud-front-origin-access-identity \
+  --cloud-front-origin-access-identity-config \
+    CallerReference="aws-demo-frontend-$(date +%s)",Comment="OAI for aws-demo frontend")
+
+# Extract the OAI ID
+OAI_ID=$(echo $OAI_OUTPUT | jq -r '.CloudFrontOriginAccessIdentity.Id')
+echo "OAI ID: $OAI_ID"
+export OAI_ID
+
+# Get the S3 Canonical User ID (needed for bucket policy)
+OAI_S3_CANONICAL_USER=$(echo $OAI_OUTPUT | jq -r '.CloudFrontOriginAccessIdentity.S3CanonicalUserId')
+export OAI_S3_CANONICAL_USER
+```
+
+#### 8B.5 Update S3 Bucket Policy for CloudFront
+
+```bash
+# Create bucket policy that grants CloudFront read access
+cat > s3-bucket-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontOAI",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity $OAI_ID"
+      },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::$BUCKET_NAME/*"
+    }
+  ]
+}
+EOF
+
+# Apply the bucket policy
+aws s3api put-bucket-policy \
+  --bucket $BUCKET_NAME \
+  --policy file://s3-bucket-policy.json
+```
+
+#### 8B.6 Create CloudFront Distribution
+
+> **What is CloudFront?**
+> AWS's Content Delivery Network (CDN) that caches your frontend files at edge locations worldwide for fast, low-latency access.
+
+```bash
+# Create CloudFront distribution configuration
+cat > cloudfront-config.json << EOF
+{
+  "CallerReference": "aws-demo-frontend-$(date +%s)",
+  "Comment": "aws-demo frontend distribution",
+  "Enabled": true,
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "S3-$BUCKET_NAME",
+        "DomainName": "$BUCKET_NAME.s3.eu-west-1.amazonaws.com",
+        "S3OriginConfig": {
+          "OriginAccessIdentity": "origin-access-identity/cloudfront/$OAI_ID"
+        }
+      }
+    ]
+  },
+  "DefaultRootObject": "index.html",
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "S3-$BUCKET_NAME",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "AllowedMethods": {
+      "Quantity": 2,
+      "Items": ["GET", "HEAD"],
+      "CachedMethods": {
+        "Quantity": 2,
+        "Items": ["GET", "HEAD"]
+      }
+    },
+    "Compress": true,
+    "ForwardedValues": {
+      "QueryString": false,
+      "Cookies": {
+        "Forward": "none"
+      }
+    },
+    "MinTTL": 0,
+    "DefaultTTL": 86400,
+    "MaxTTL": 31536000,
+    "TrustedSigners": {
+      "Enabled": false,
+      "Quantity": 0
+    }
+  },
+  "CustomErrorResponses": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "ErrorCode": 404,
+        "ResponsePagePath": "/index.html",
+        "ResponseCode": "200",
+        "ErrorCachingMinTTL": 300
+      }
+    ]
+  },
+  "PriceClass": "PriceClass_100",
+  "ViewerCertificate": {
+    "CloudFrontDefaultCertificate": true
+  }
+}
+EOF
+
+# Create the distribution (this takes 15-20 minutes to deploy globally)
+CF_OUTPUT=$(aws cloudfront create-distribution --distribution-config file://cloudfront-config.json)
+
+# Extract CloudFront domain name
+CLOUDFRONT_DOMAIN=$(echo $CF_OUTPUT | jq -r '.Distribution.DomainName')
+echo "CloudFront Domain: $CLOUDFRONT_DOMAIN"
+export CLOUDFRONT_DOMAIN
+
+# Extract distribution ID (needed for invalidations later)
+CF_DISTRIBUTION_ID=$(echo $CF_OUTPUT | jq -r '.Distribution.Id')
+echo "Distribution ID: $CF_DISTRIBUTION_ID"
+export CF_DISTRIBUTION_ID
+
+echo "⏳ CloudFront distribution is deploying... This takes 15-20 minutes."
+echo "You can check status with: aws cloudfront get-distribution --id $CF_DISTRIBUTION_ID"
+```
+
+#### 8B.7 Update Frontend API URL
+
+> **Important**: After creating the ALB in Step 9, you'll need to rebuild and redeploy the frontend with the correct API URL.
+
+```bash
+# Save this command for after ALB creation:
+cat > update-frontend-api-url.sh << 'EOF'
+#!/bin/bash
+# Run this script after creating the ALB in Step 9
+
+# Get ALB DNS name (set $ALB_DNS from Step 9)
+cd ../../frontend
+
+# Update API URL
+cat > .env.production << ENVEOF
+VITE_API_URL=http://$ALB_DNS
+ENVEOF
+
+# Rebuild
+npm run build
+
+# Re-upload to S3
+aws s3 sync dist/ s3://$BUCKET_NAME/ \
+  --delete \
+  --cache-control "public, max-age=31536000" \
+  --exclude "index.html"
+
+aws s3 cp dist/index.html s3://$BUCKET_NAME/index.html \
+  --cache-control "no-cache, no-store, must-revalidate"
+
+# Invalidate CloudFront cache to see changes immediately
+aws cloudfront create-invalidation \
+  --distribution-id $CF_DISTRIBUTION_ID \
+  --paths "/*"
+
+echo "✅ Frontend updated with ALB URL!"
+ENVEOF
+
+chmod +x update-frontend-api-url.sh
+echo "💾 Script saved: update-frontend-api-url.sh (run this after Step 9)"
+```
+
+**✅ If you chose Option B, continue to Step 9**
 
 ---
 
@@ -780,10 +1159,10 @@ aws elbv2 create-load-balancer \
 export ALB_ARN=arn:aws:elasticloadbalancing:eu-west-1:xxxx:loadbalancer/app/aws-demo-alb/xxxx
 ```
 
-### 9.2 Create Target Groups
+### 9.2 Create Backend Target Group
 
 > **What are Target Groups?**
-> Target groups define where the ALB should send traffic. Each group contains instances (targets) that handle the same type of request.
+> Target groups define where the ALB should send traffic. The backend target group is needed for both deployment options.
 
 > ⚠️ **Windows Git Bash Users**: Git Bash converts paths starting with `/` to Windows paths.
 > Use `//api/messages` (double slash) or run in **PowerShell** or **CMD** instead.
@@ -804,8 +1183,21 @@ aws elbv2 create-target-group \
 # --port 8080: Backend Spring Boot runs on this port
 
 export BACKEND_TG_ARN=arn:aws:elasticloadbalancing:...
+```
 
-# Create Frontend Target Group (for web requests)
+### 9.3 Register Backend Instance
+
+```bash
+# Register the backend instance with its target group
+aws elbv2 register-targets --target-group-arn $BACKEND_TG_ARN --targets Id=$BACKEND_INSTANCE_ID
+```
+
+### 9.4 Create Listener - Choose Based on Your Frontend Option
+
+#### If you chose Option A (EC2 Frontend):
+
+```bash
+# First create Frontend Target Group
 aws elbv2 create-target-group \
   --name aws-demo-frontend-tg \
   --protocol HTTP \
@@ -815,35 +1207,20 @@ aws elbv2 create-target-group \
   --target-type instance
 
 export FRONTEND_TG_ARN=arn:aws:elasticloadbalancing:...
-```
 
-### 9.3 Register Instances with Target Groups
-
-```bash
-# Tell ALB which instances belong to which target group
-aws elbv2 register-targets --target-group-arn $BACKEND_TG_ARN --targets Id=$BACKEND_INSTANCE_ID
+# Register frontend instance
 aws elbv2 register-targets --target-group-arn $FRONTEND_TG_ARN --targets Id=$FRONTEND_INSTANCE_ID
-```
 
-### 9.4 Create Listener and Rules
-
-> **What is a Listener?**
-> A listener checks for connection requests on a specific port (80 for HTTP) and routes them according to rules.
-
-```bash
-# Create the main listener on port 80
-# Default action: send to frontend (for serving the React app)
+# Create listener with frontend as default action
 aws elbv2 create-listener \
   --load-balancer-arn $ALB_ARN \
   --protocol HTTP \
   --port 80 \
   --default-actions Type=forward,TargetGroupArn=$FRONTEND_TG_ARN
 
-# ⚠️ IMPORTANT: Copy the ListenerArn from output
 export LISTENER_ARN=arn:aws:elasticloadbalancing:...
 
-# Add a rule to route /api/* requests to the backend
-# This enables our frontend to call the backend API through the same domain
+# Add rule to route /api/* to backend
 aws elbv2 create-rule \
   --listener-arn $LISTENER_ARN \
   --priority 10 \
@@ -851,9 +1228,44 @@ aws elbv2 create-rule \
   --actions Type=forward,TargetGroupArn=$BACKEND_TG_ARN
 ```
 
+#### If you chose Option B (S3 + CloudFront Frontend):
+
+> **For S3 + CloudFront**: The ALB only handles API requests. Frontend is served by CloudFront.
+
+```bash
+# Create listener that ONLY routes /api/* to backend
+# All other traffic will get a 404 (which is fine - users access CloudFront directly)
+aws elbv2 create-listener \
+  --load-balancer-arn $ALB_ARN \
+  --protocol HTTP \
+  --port 80 \
+  --default-actions Type=fixed-response,FixedResponseConfig="{StatusCode=404,ContentType=text/plain,MessageBody='Not Found - Use CloudFront URL for frontend'}"
+
+export LISTENER_ARN=arn:aws:elasticloadbalancing:...
+
+# Add rule to route /api/* to backend
+aws elbv2 create-rule \
+  --listener-arn $LISTENER_ARN \
+  --priority 10 \
+  --conditions Field=path-pattern,Values='/api/*' \
+  --actions Type=forward,TargetGroupArn=$BACKEND_TG_ARN
+
+# Get ALB DNS for updating frontend config
+ALB_DNS=$(aws elbv2 describe-load-balancers --names aws-demo-alb --query 'LoadBalancers[0].DNSName' --output text)
+echo "ALB DNS: $ALB_DNS"
+export ALB_DNS
+
+# NOW run the update script we created earlier:
+echo "⚠️ IMPORTANT: Run the update script to rebuild frontend with correct API URL:"
+echo "cd infrastructure/1-ec2"
+echo "BUCKET_NAME=$BUCKET_NAME CF_DISTRIBUTION_ID=$CF_DISTRIBUTION_ID ALB_DNS=$ALB_DNS bash update-frontend-api-url.sh"
+```
+
 ---
 
 ## Step 10: Test the Deployment
+
+### For Option A (EC2 Frontend):
 
 ```bash
 # Get the ALB DNS name - this is your application's URL!
@@ -874,11 +1286,34 @@ curl -X POST http://$ALB_DNS/api/messages \
   -d '{"content": "Hello from EC2!"}'
 ```
 
+### For Option B (S3 + CloudFront Frontend):
+
+```bash
+# Your frontend URL is the CloudFront domain (from Step 8B.6)
+echo "Frontend URL: https://$CLOUDFRONT_DOMAIN"
+echo "Backend API URL: http://$ALB_DNS"
+
+# Test backend API directly
+curl http://$ALB_DNS/api/messages
+
+# Test creating a message
+curl -X POST http://$ALB_DNS/api/messages \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Hello from S3 + CloudFront!"}'
+
+# Open frontend in browser
+echo "🌐 Open in browser: https://$CLOUDFRONT_DOMAIN"
+
+# Check CloudFront distribution status
+aws cloudfront get-distribution --id $CF_DISTRIBUTION_ID --query 'Distribution.Status' --output text
+# Should show "Deployed" when ready (takes 15-20 minutes after creation)
+```
+
 ---
 
 ## Troubleshooting
 
-### Check EC2 Instance Status
+### For Option A - Check EC2 Instance Status
 
 ```bash
 # View instance status
@@ -887,6 +1322,29 @@ aws ec2 describe-instance-status --instance-ids $BACKEND_INSTANCE_ID $FRONTEND_I
 # SSH into backend to check logs
 ssh -i aws-demo-key.pem ec2-user@<BACKEND_PUBLIC_IP>
 sudo docker logs backend
+
+# SSH into frontend to check logs
+ssh -i aws-demo-key.pem ec2-user@<FRONTEND_PUBLIC_IP>
+sudo docker logs frontend
+```
+
+### For Option B - Check S3 and CloudFront
+
+```bash
+# List files in S3 bucket
+aws s3 ls s3://$BUCKET_NAME/ --recursive
+
+# Check CloudFront distribution status
+aws cloudfront get-distribution --id $CF_DISTRIBUTION_ID
+
+# Test CloudFront cache
+curl -I https://$CLOUDFRONT_DOMAIN
+# Look for "X-Cache: Hit from cloudfront" header (means cached)
+
+# Invalidate CloudFront cache if you updated files
+aws cloudfront create-invalidation \
+  --distribution-id $CF_DISTRIBUTION_ID \
+  --paths "/*"
 ```
 
 ### Check Target Group Health
