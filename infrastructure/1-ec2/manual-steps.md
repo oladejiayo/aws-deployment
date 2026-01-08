@@ -11,28 +11,151 @@ This option deploys the application on EC2 instances with:
 ## Architecture
 
 ### High-Level Overview
+
+```mermaid
+graph TB
+    Internet[🌐 Internet]
+    ALB[⚖️ Application Load Balancer<br/>Port 80/443]
+    Backend[🖥️ EC2 Backend<br/>Spring Boot:8080]
+    Frontend[🖥️ EC2 Frontend<br/>Nginx:80]
+    RDS[(🗄️ RDS PostgreSQL<br/>Port 5432)]
+    
+    Internet --> ALB
+    ALB -->|/api/*| Backend
+    ALB -->|/*| Frontend
+    Backend --> RDS
+    
+    style Internet fill:#e1f5ff
+    style ALB fill:#fff4e1
+    style Backend fill:#e8f5e9
+    style Frontend fill:#e8f5e9
+    style RDS fill:#f3e5f5
 ```
-                    ┌─────────────────┐
-                    │   Internet      │
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │       ALB       │
-                    │   (Port 80/443) │
-                    └────────┬────────┘
-                             │
-            ┌────────────────┼────────────────┐
-            │                │                │
-   ┌────────▼────────┐      │       ┌────────▼────────┐
-   │   EC2 Backend   │      │       │  EC2 Frontend   │
-   │   (Port 8080)   │      │       │   (Port 80)     │
-   └────────┬────────┘      │       └─────────────────┘
-            │               │
-   ┌────────▼────────┐      │
-   │  RDS PostgreSQL │      │
-   │   (Port 5432)   │◄─────┘
-   └─────────────────┘
+
+### Detailed Architecture with VPC and Security
+
+```mermaid
+graph TB
+    subgraph Internet
+        Users[👥 Users]
+    end
+    
+    IGW[🌐 Internet Gateway]
+    
+    subgraph VPC["🏢 VPC (10.0.0.0/16)"]
+        subgraph PublicRT["📋 Public Route Table<br/>(0.0.0.0/0 → IGW)"]
+        end
+        
+        ALB[⚖️ ALB<br/>Security Group: ALB-SG<br/>Inbound: 80, 443 from 0.0.0.0/0]
+        
+        subgraph AZ1["🏗️ Availability Zone: eu-west-1a"]
+            subgraph PubSub1["Public Subnet<br/>10.0.1.0/24"]
+                Backend[🖥️ EC2 Backend<br/>Docker:8080<br/>SG: APP-SG<br/>IAM: ECR Access]
+            end
+            
+            subgraph PrivSub1["🔒 Private Subnet<br/>10.0.10.0/24"]
+                RDS1[(🗄️ RDS PostgreSQL<br/>db.t3.micro<br/>SG: RDS-SG<br/>Port: 5432)]
+            end
+        end
+        
+        subgraph AZ2["🏗️ Availability Zone: eu-west-1b"]
+            subgraph PubSub2["Public Subnet<br/>10.0.2.0/24"]
+                Frontend[🖥️ EC2 Frontend<br/>Nginx:80<br/>SG: APP-SG<br/>IAM: ECR Access]
+            end
+            
+            subgraph PrivSub2["🔒 Private Subnet<br/>10.0.11.0/24"]
+                RDS2[(Standby)]
+            end
+        end
+    end
+    
+    subgraph External["☁️ AWS Managed Services"]
+        ECR[📦 Amazon ECR<br/>• backend:latest<br/>• frontend:latest]
+    end
+    
+    Users --> IGW
+    IGW --> ALB
+    ALB -->|Target Group<br/>Port 8080| Backend
+    ALB -->|Target Group<br/>Port 80| Frontend
+    Backend --> RDS1
+    RDS1 -.->|Multi-AZ<br/>Replication| RDS2
+    Backend -.->|Pull Image| ECR
+    Frontend -.->|Pull Image| ECR
+    
+    style VPC fill:#e3f2fd
+    style AZ1 fill:#fff3e0
+    style AZ2 fill:#fff3e0
+    style PubSub1 fill:#c8e6c9
+    style PubSub2 fill:#c8e6c9
+    style PrivSub1 fill:#ffcdd2
+    style PrivSub2 fill:#ffcdd2
+    style External fill:#f3e5f5
 ```
+
+### Security Group Rules
+
+```mermaid
+graph LR
+    Internet[🌐 Internet<br/>0.0.0.0/0]
+    
+    subgraph ALB_SG["🛡️ ALB-SG"]
+        ALB[ALB]
+    end
+    
+    subgraph APP_SG["🛡️ APP-SG"]
+        EC2[EC2 Instances]
+    end
+    
+    subgraph RDS_SG["🛡️ RDS-SG"]
+        RDS[(RDS)]
+    end
+    
+    Internet -->|80, 443| ALB
+    ALB -->|8080, 80| EC2
+    EC2 -->|5432| RDS
+    Internet -.->|22 SSH| EC2
+    
+    style ALB_SG fill:#fff4e1
+    style APP_SG fill:#e8f5e9
+    style RDS_SG fill:#f3e5f5
+```
+
+### Traffic Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant ALB
+    participant Backend
+    participant Frontend
+    participant RDS
+    participant ECR
+    
+    Note over User,RDS: Initial Setup
+    Backend->>ECR: Pull backend:latest image
+    Frontend->>ECR: Pull frontend:latest image
+    
+    Note over User,RDS: Frontend Request
+    User->>ALB: GET / (Port 80)
+    ALB->>Frontend: Route to Frontend:80
+    Frontend-->>User: Return HTML/JS/CSS
+    
+    Note over User,RDS: API Request
+    User->>ALB: GET /api/messages
+    ALB->>Backend: Route to Backend:8080
+    Backend->>RDS: Query database:5432
+    RDS-->>Backend: Return data
+    Backend-->>ALB: JSON response
+    ALB-->>User: Return JSON
+```
+
+**Key Components:**
+
+• **VPC**: Isolated network (10.0.0.0/16) with public and private subnets across 2 AZs
+• **ALB**: Routes `/api/*` to backend, everything else to frontend
+• **EC2 Instances**: Pull Docker images from ECR using IAM roles
+• **RDS**: PostgreSQL in private subnets, only accessible from APP-SG
+• **Security**: Multi-layered security groups control all traffic
 
 ### Detailed Architecture with VPC and Security
 ```

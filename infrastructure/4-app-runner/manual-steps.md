@@ -10,29 +10,186 @@ This option deploys the application using AWS App Runner:
 ## Architecture
 
 ### High-Level Overview
+
+```mermaid
+graph TB
+    Internet[🌐 Internet]
+    
+    subgraph AppRunner["☁️ AWS App Runner (Serverless)"]
+        Frontend[🎨 Frontend Service<br/>Auto HTTPS<br/>xxxxx.awsapprunner.com<br/>Nginx:80]
+        Backend[⚙️ Backend Service<br/>Auto HTTPS<br/>yyyyy.awsapprunner.com<br/>Spring Boot:8080]
+    end
+    
+    VPCConn[🔌 VPC Connector]
+    
+    subgraph VPC["🏢 VPC (Private)"]
+        RDS[(🗄️ RDS PostgreSQL<br/>Private Subnet<br/>Port 5432)]
+    end
+    
+    Internet --> Frontend
+    Internet --> Backend
+    Backend --> VPCConn
+    VPCConn --> RDS
+    
+    style Internet fill:#e1f5ff
+    style AppRunner fill:#f1f8e9
+    style Frontend fill:#e1bee7
+    style Backend fill:#c8e6c9
+    style VPCConn fill:#fff3e0
+    style VPC fill:#ffcdd2
 ```
-                    ┌─────────────────┐
-                    │   Internet      │
-                    └────────┬────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-         ▼                   │                   ▼
-┌─────────────────┐          │          ┌─────────────────┐
-│  App Runner     │          │          │  App Runner     │
-│  (Frontend)     │          │          │  (Backend)      │
-│  Auto HTTPS     │          │          │  Auto HTTPS     │
-└─────────────────┘          │          └────────┬────────┘
-                             │                   │
-                             │          ┌────────▼────────┐
-                             │          │  VPC Connector  │
-                             │          └────────┬────────┘
-                             │                   │
-                             │          ┌────────▼────────┐
-                             └─────────►│  RDS PostgreSQL │
-                                        │ (Private Subnet)│
-                                        └─────────────────┘
+
+### Detailed Architecture with App Runner
+
+```mermaid
+graph TB
+    subgraph Internet
+        Users[👥 Users]
+    end
+    
+    subgraph Frontend_Service["🎨 App Runner: Frontend Service"]
+        FrontendURL[🌐 https://xxxxx.awsapprunner.com<br/>Auto-Generated Domain<br/>Automatic HTTPS/TLS]
+        
+        subgraph FrontendConfig["⚙️ Configuration"]
+            FConfig[Port: 80<br/>CPU: 0.25 vCPU<br/>Memory: 0.5 GB<br/>Auto-Scale: 1-10<br/>Health: / ]
+        end
+        
+        subgraph FrontendTasks["🐳 Container Instances<br/>(Managed by App Runner)"]
+            FTask1[Nginx:80<br/>React SPA]
+            FTask2[Nginx:80<br/>React SPA]
+        end
+    end
+    
+    subgraph Backend_Service["⚙️ App Runner: Backend Service"]
+        BackendURL[🌐 https://yyyyy.awsapprunner.com<br/>Auto-Generated Domain<br/>Automatic HTTPS/TLS]
+        
+        subgraph BackendConfig["⚙️ Configuration"]
+            BConfig[Port: 8080<br/>CPU: 0.25 vCPU<br/>Memory: 0.5 GB<br/>Auto-Scale: 1-10<br/>Health: /api/messages<br/>Env: DATABASE_URL, etc.]
+        end
+        
+        subgraph BackendTasks["🐳 Container Instances<br/>(Managed by App Runner)"]
+            BTask1[Spring Boot:8080]
+            BTask2[Spring Boot:8080]
+        end
+        
+        VPCConnector[🔌 VPC Connector<br/>• Subnets: 10.0.1.0/24<br/>• Security Group: app-runner-sg<br/>• Enables private VPC access]
+    end
+    
+    subgraph VPC["🏢 VPC (10.0.0.0/16)"]
+        subgraph PrivateSubnets["🔒 Private Subnets<br/>10.0.10.0/24, 10.0.11.0/24"]
+            RDS[(🗄️ RDS PostgreSQL<br/>db.t3.micro<br/>Engine: 18.1<br/>SG: rds-sg<br/>Port: 5432<br/>NOT public)]
+        end
+    end
+    
+    subgraph External["☁️ AWS Managed Services"]
+        ECR[📦 Amazon ECR<br/>• frontend:latest<br/>• backend:latest]
+        AppRunnerControl[🎛️ App Runner Control<br/>• Auto-scaling<br/>• Health monitoring<br/>• Zero-downtime deploys<br/>• Automatic HTTPS]
+    end
+    
+    Users -->|Frontend Requests| FrontendURL
+    Users -->|API Requests| BackendURL
+    
+    FrontendURL --> FrontendTasks
+    BackendURL --> BackendTasks
+    
+    BackendTasks --> VPCConnector
+    VPCConnector --> RDS
+    
+    FTask1 -.->|Pull Image| ECR
+    FTask2 -.->|Pull Image| ECR
+    BTask1 -.->|Pull Image| ECR
+    BTask2 -.->|Pull Image| ECR
+    
+    AppRunnerControl -.->|Manages| FrontendTasks
+    AppRunnerControl -.->|Manages| BackendTasks
+    
+    style Frontend_Service fill:#e1f5ff
+    style Backend_Service fill:#c8e6c9
+    style VPC fill:#ffcdd2
+    style External fill:#f3e5f5
 ```
+
+### Auto-Scaling Behavior
+
+```mermaid
+graph LR
+    subgraph Metrics["📊 Metrics"]
+        Requests[Concurrent<br/>Requests]
+        CPU[CPU Usage]
+        Memory[Memory Usage]
+    end
+    
+    subgraph Scaling["📈 Scaling Logic"]
+        Evaluate[Concurrency Target:<br/>100 requests/instance]
+        ScaleUp[⬆️ Scale Up<br/>If exceeds target]
+        ScaleDown[⬇️ Scale Down<br/>If below target]
+    end
+    
+    subgraph Limits["🎚️ Limits"]
+        Min[Minimum: 1 instance<br/>Always running]
+        Max[Maximum: 10 instances<br/>Cost protection]
+    end
+    
+    Requests --> Evaluate
+    CPU --> Evaluate
+    Memory --> Evaluate
+    
+    Evaluate --> ScaleUp
+    Evaluate --> ScaleDown
+    
+    ScaleUp --> Max
+    ScaleDown --> Min
+    
+    style Metrics fill:#e3f2fd
+    style Scaling fill:#c8e6c9
+    style Limits fill:#fff3e0
+```
+
+### Traffic Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend Service
+    participant Backend Service
+    participant VPC Connector
+    participant RDS
+    participant ECR
+    
+    Note over User,ECR: Service Initialization
+    Backend Service->>ECR: Pull backend:latest
+    Frontend Service->>ECR: Pull frontend:latest
+    Backend Service->>VPC Connector: Establish connection
+    VPC Connector->>RDS: Test connectivity
+    
+    Note over User,RDS: Frontend Request
+    User->>Frontend Service: GET /<br/>https://xxxxx.awsapprunner.com
+    Frontend Service-->>User: Return React SPA (HTML/JS/CSS)
+    
+    Note over User,RDS: API Request with DB Query
+    User->>Backend Service: GET /api/messages<br/>https://yyyyy.awsapprunner.com
+    Backend Service->>VPC Connector: Route through VPC
+    VPC Connector->>RDS: Query database:5432<br/>(private network)
+    RDS-->>VPC Connector: Return data
+    VPC Connector-->>Backend Service: Forward response
+    Backend Service-->>User: JSON response (HTTPS)
+    
+    Note over User,RDS: POST Request
+    User->>Backend Service: POST /api/messages
+    Backend Service->>VPC Connector: Route through VPC
+    VPC Connector->>RDS: Insert data
+    RDS-->>User: Success response
+```
+
+**Key App Runner Concepts:**
+
+• **Fully Managed Serverless**: No infrastructure to manage (no EC2, no ECS clusters)
+• **Auto HTTPS**: SSL/TLS certificates provisioned and renewed automatically
+• **Auto-Scaling**: Based on concurrent requests per instance (default: 100)
+• **VPC Connector**: Enables App Runner to access resources in private VPC subnets
+• **Source Types**: ECR image, GitHub, or Bitbucket repository
+• **Zero Downtime Deploys**: Blue/green deployments built-in
+• **Per-Request Pricing**: Pay for compute time + active instances + requests
 
 ### Detailed Architecture with App Runner Services
 ```

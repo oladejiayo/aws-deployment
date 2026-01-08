@@ -10,32 +10,43 @@ This option deploys the application using AWS Elastic Beanstalk:
 ## Architecture
 
 ### High-Level Overview
-```
-                    ┌─────────────────┐
-                    │   Internet      │
-                    └────────┬────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-         ▼                   │                   ▼
-┌─────────────────┐          │          ┌─────────────────┐
-│   CloudFront    │          │          │  EB Environment │
-│  (Frontend CDN) │          │          │   Load Balancer │
-└────────┬────────┘          │          └────────┬────────┘
-         │                   │                   │
-         ▼                   │                   ▼
-┌─────────────────┐          │          ┌─────────────────┐
-│    S3 Bucket    │          │          │  Auto Scaling   │
-│ (Static Files)  │          │          │     Group       │
-└─────────────────┘          │          │  ┌───────────┐  │
-                             │          │  │EC2 Instance│  │
-                             │          │  │(Java App)  │  │
-                             │          │  └───────────┘  │
-                             │          └────────┬────────┘
-                             │                   │
-                             │          ┌────────▼────────┐
-                             └─────────►│  RDS PostgreSQL │
-                                        └─────────────────┘
+
+```mermaid
+graph TB
+    Internet[🌐 Internet]
+    
+    subgraph Frontend["🎨 Frontend Path"]
+        CF[☁️ CloudFront CDN<br/>Global Edge Locations]
+        S3[🪣 S3 Bucket<br/>Static Files<br/>• index.html<br/>• assets/*.js<br/>• assets/*.css]
+    end
+    
+    subgraph Backend["⚙️ Backend Path"]
+        IGW[🌐 Internet Gateway]
+        
+        subgraph EB["📦 Elastic Beanstalk Environment"]
+            ELB[⚖️ Load Balancer<br/>Managed by EB]
+            ASG[📈 Auto Scaling Group<br/>Min: 1, Max: 4, Desired: 2]
+            EC2_1[🖥️ EC2 Instance 1<br/>Java 17 + Tomcat<br/>t3.micro]
+            EC2_2[🖥️ EC2 Instance 2<br/>Java 17 + Tomcat<br/>t3.micro]
+        end
+    end
+    
+    RDS[(🗄️ RDS PostgreSQL<br/>db.t3.micro)]
+    
+    Internet --> CF
+    CF --> S3
+    Internet --> IGW
+    IGW --> ELB
+    ELB --> ASG
+    ASG --> EC2_1
+    ASG --> EC2_2
+    EC2_1 --> RDS
+    EC2_2 --> RDS
+    
+    style Frontend fill:#e1f5ff
+    style Backend fill:#fff4e1
+    style EB fill:#e8f5e9
+    style RDS fill:#f3e5f5
 ```
 
 ### Detailed Architecture with Elastic Beanstalk Components
@@ -144,6 +155,170 @@ This option deploys the application using AWS Elastic Beanstalk:
 • CPU < 20% for 10 min → Remove instance (down to min: 1)
 • Load Balancer distributes traffic across healthy instances only
 ```
+
+### Detailed Architecture with Elastic Beanstalk
+
+```mermaid
+graph TB
+    subgraph Internet
+        Users[👥 Users]
+    end
+    
+    IGW[🌐 Internet Gateway]
+    
+    subgraph Frontend_Stack["🎨 Frontend Stack"]
+        CF[☁️ CloudFront<br/>CDN Distribution]
+        S3[🪣 S3 Bucket<br/>• React Build<br/>• Versioning: On]
+    end
+    
+    subgraph VPC["🏢 VPC (EB Managed)"]
+        subgraph EB_Environment["📦 Elastic Beanstalk Environment<br/>Platform: Java 17 with Tomcat"]
+            ELB[⚖️ Application Load Balancer<br/>SG: eb-lb-sg<br/>Ports: 80, 443]
+            
+            subgraph ASG["📈 Auto Scaling Group<br/>Min: 1, Max: 4, Desired: 2"]
+                subgraph AZ1["🏗️ eu-west-1a"]
+                    EC2_1[🖥️ EC2 Instance 1<br/>t3.micro<br/>• Spring Boot JAR<br/>• Tomcat:5000<br/>• CloudWatch Agent<br/>• Enhanced Health]
+                end
+                
+                subgraph AZ2["🏗️ eu-west-1b"]
+                    EC2_2[🖥️ EC2 Instance 2<br/>t3.micro<br/>• Spring Boot JAR<br/>• Tomcat:5000<br/>• CloudWatch Agent<br/>• Enhanced Health]
+                end
+            end
+        end
+        
+        subgraph Database["🔒 Private Subnets"]
+            RDS[(🗄️ RDS PostgreSQL<br/>db.t3.micro<br/>SG: rds-sg<br/>Port: 5432<br/>Multi-AZ: Optional)]
+        end
+    end
+    
+    subgraph EB_Control["🎛️ Elastic Beanstalk Control Plane"]
+        Monitor[📊 Enhanced Health<br/>Reporting]
+        AutoScale[📈 Auto-Scaling<br/>Triggers]
+        Deploy[🚀 Deployment<br/>Manager]
+        Logs[📝 Log Rotation<br/>to S3]
+    end
+    
+    Users -->|Static Assets| CF
+    CF --> S3
+    Users -->|API Requests| IGW
+    IGW --> ELB
+    ELB --> EC2_1
+    ELB --> EC2_2
+    EC2_1 --> RDS
+    EC2_2 --> RDS
+    
+    Monitor -.->|Health Checks| EC2_1
+    Monitor -.->|Health Checks| EC2_2
+    AutoScale -.->|Scale Actions| ASG
+    Deploy -.->|Updates| EC2_1
+    Deploy -.->|Updates| EC2_2
+    Logs -.->|Collect Logs| EC2_1
+    Logs -.->|Collect Logs| EC2_2
+    
+    style VPC fill:#e3f2fd
+    style EB_Environment fill:#f1f8e9
+    style Frontend_Stack fill:#e1f5ff
+    style EB_Control fill:#fff3e0
+    style Database fill:#ffcdd2
+```
+
+### Auto-Scaling Behavior
+
+```mermaid
+graph LR
+    subgraph Metrics["📊 CloudWatch Metrics"]
+        CPU[CPU Utilization]
+        Network[Network I/O]
+        Latency[Response Latency]
+    end
+    
+    subgraph Triggers["⚡ Scaling Triggers"]
+        ScaleUp[🔺 Scale Up<br/>CPU > 80% for 5 min]
+        ScaleDown[🔻 Scale Down<br/>CPU < 20% for 10 min]
+    end
+    
+    subgraph Actions["🎬 Actions"]
+        AddInstance[➕ Add Instance<br/>Up to Max: 4]
+        RemoveInstance[➖ Remove Instance<br/>Down to Min: 1]
+    end
+    
+    CPU --> ScaleUp
+    Network --> ScaleUp
+    Latency --> ScaleUp
+    
+    CPU --> ScaleDown
+    Network --> ScaleDown
+    
+    ScaleUp --> AddInstance
+    ScaleDown --> RemoveInstance
+    
+    style Metrics fill:#e3f2fd
+    style Triggers fill:#fff3e0
+    style Actions fill:#c8e6c9
+```
+
+### Deployment Strategies
+
+```mermaid
+graph TB
+    subgraph Strategies["🚀 Deployment Policies"]
+        AllAtOnce[All at Once<br/>⚡ Fastest<br/>⚠️ Downtime]
+        Rolling[Rolling<br/>⏱️ Gradual<br/>✅ No downtime<br/>📉 Reduced capacity]
+        RollingBatch[Rolling with Batch<br/>⏱️ Gradual<br/>✅ No downtime<br/>✅ Full capacity]
+        Immutable[Immutable<br/>🐢 Slowest<br/>✅ No downtime<br/>✅ Easy rollback<br/>💰 Temporary 2x cost]
+        BlueGreen[Blue/Green<br/>🎯 Zero downtime<br/>✅ Instant rollback<br/>💰 2x cost until swap]
+    end
+    
+    style AllAtOnce fill:#ffcdd2
+    style Rolling fill:#fff9c4
+    style RollingBatch fill:#c8e6c9
+    style Immutable fill:#b3e5fc
+    style BlueGreen fill:#e1bee7
+```
+
+### Traffic Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CloudFront
+    participant S3
+    participant ELB
+    participant EC2_1
+    participant EC2_2
+    participant RDS
+    
+    Note over User,RDS: Frontend Request
+    User->>CloudFront: GET /index.html
+    CloudFront->>S3: Fetch from origin
+    S3-->>CloudFront: Static files
+    CloudFront-->>User: Cached response (fast)
+    
+    Note over User,RDS: API Request (First Instance)
+    User->>ELB: GET /api/messages
+    ELB->>EC2_1: Route to healthy instance
+    EC2_1->>RDS: Query database
+    RDS-->>EC2_1: Return data
+    EC2_1-->>ELB: JSON response
+    ELB-->>User: Return to user
+    
+    Note over User,RDS: Load Balanced Request
+    User->>ELB: POST /api/messages
+    ELB->>EC2_2: Route to next instance
+    EC2_2->>RDS: Insert data
+    RDS-->>EC2_2: Confirm
+    EC2_2-->>User: Success response
+```
+
+**Key Elastic Beanstalk Concepts:**
+
+• **Managed Platform**: EB handles infrastructure, OS patches, platform updates
+• **Application Versions**: Upload code as ZIP, EB deploys across instances
+• **Environment**: Running instance of application (dev, staging, prod)
+• **Auto-Scaling**: Automatically adjusts capacity based on metrics
+• **Load Balancing**: Distributes traffic across healthy instances
+• **Enhanced Health**: Application-level health monitoring
+• **CloudWatch Integration**: Automatic log streaming and metrics
 
 ## Cost Estimate (us-east-1)
 

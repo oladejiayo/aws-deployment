@@ -12,29 +12,175 @@ This option deploys the application using AWS ECS Fargate:
 ## Architecture
 
 ### High-Level Overview
+
+```mermaid
+graph TB
+    Internet[🌐 Internet]
+    ALB[⚖️ Application Load Balancer<br/>Port 80/443]
+    
+    subgraph ECS["☁️ ECS Cluster: aws-demo"]
+        BackendSvc[📦 ECS Service<br/>Backend<br/>Desired: 2 Fargate Tasks]
+        FrontendSvc[📦 ECS Service<br/>Frontend<br/>Desired: 2 Fargate Tasks]
+    end
+    
+    RDS[(🗄️ RDS PostgreSQL<br/>Port 5432)]
+    
+    Internet --> ALB
+    ALB -->|/api/*<br/>Target: IP:8080| BackendSvc
+    ALB -->|/*<br/>Target: IP:80| FrontendSvc
+    BackendSvc --> RDS
+    
+    style Internet fill:#e1f5ff
+    style ALB fill:#fff4e1
+    style ECS fill:#e8f5e9
+    style BackendSvc fill:#c8e6c9
+    style FrontendSvc fill:#c8e6c9
+    style RDS fill:#f3e5f5
 ```
-                    ┌─────────────────┐
-                    │   Internet      │
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │       ALB       │
-                    │   (Port 80/443) │
-                    └────────┬────────┘
-                             │
-            ┌────────────────┼────────────────┐
-            │                │                │
-   ┌────────▼────────┐      │       ┌────────▼────────┐
-   │  ECS Service    │      │       │  ECS Service    │
-   │   (Backend)     │      │       │   (Frontend)    │
-   │  Fargate Tasks  │      │       │  Fargate Tasks  │
-   └────────┬────────┘      │       └─────────────────┘
-            │               │
-   ┌────────▼────────┐      │
-   │  RDS PostgreSQL │      │
-   │   (Port 5432)   │◄─────┘
-   └─────────────────┘
+
+### Detailed Architecture with ECS Fargate and VPC
+
+```mermaid
+graph TB
+    subgraph Internet
+        Users[👥 Users]
+    end
+    
+    IGW[🌐 Internet Gateway]
+    
+    subgraph VPC["🏢 VPC (10.0.0.0/16)"]
+        ALB[⚖️ ALB<br/>Security Group: ALB-SG<br/>Target Type: IP]
+        
+        subgraph ECS_Cluster["☁️ ECS Cluster: aws-demo"]
+            subgraph BackendService["📦 Backend Service<br/>Launch Type: Fargate<br/>Desired: 2"]
+            end
+            
+            subgraph FrontendService["📦 Frontend Service<br/>Launch Type: Fargate<br/>Desired: 2"]
+            end
+        end
+        
+        subgraph AZ1["🏗️ eu-west-1a"]
+            subgraph PubSub1["Public Subnet<br/>10.0.1.0/24"]
+                BTask1[🐳 Fargate Task<br/>Backend:8080<br/>0.25vCPU, 0.5GB<br/>ENI: Private IP]
+                FTask1[🐳 Fargate Task<br/>Frontend:80<br/>0.25vCPU, 0.5GB<br/>ENI: Private IP]
+            end
+            
+            subgraph PrivSub1["🔒 Private Subnet<br/>10.0.10.0/24"]
+                RDS1[(🗄️ RDS PostgreSQL<br/>db.t3.micro<br/>SG: RDS-SG)]
+            end
+        end
+        
+        subgraph AZ2["🏗️ eu-west-1b"]
+            subgraph PubSub2["Public Subnet<br/>10.0.2.0/24"]
+                BTask2[🐳 Fargate Task<br/>Backend:8080<br/>0.25vCPU, 0.5GB<br/>ENI: Private IP]
+                FTask2[🐳 Fargate Task<br/>Frontend:80<br/>0.25vCPU, 0.5GB<br/>ENI: Private IP]
+            end
+            
+            subgraph PrivSub2["🔒 Private Subnet<br/>10.0.11.0/24"]
+                RDS2[(Standby)]
+            end
+        end
+    end
+    
+    subgraph External["☁️ AWS Managed Services"]
+        ECR[📦 Amazon ECR<br/>• backend:latest<br/>• frontend:latest]
+        ECSControl[🎛️ ECS Control Plane<br/>• Health monitoring<br/>• Auto-restart failed tasks<br/>• Task scheduling]
+    end
+    
+    Users --> IGW
+    IGW --> ALB
+    ALB -->|Backend TG| BTask1
+    ALB -->|Backend TG| BTask2
+    ALB -->|Frontend TG| FTask1
+    ALB -->|Frontend TG| FTask2
+    
+    BackendService -.->|Contains| BTask1
+    BackendService -.->|Contains| BTask2
+    FrontendService -.->|Contains| FTask1
+    FrontendService -.->|Contains| FTask2
+    
+    BTask1 --> RDS1
+    BTask2 --> RDS1
+    RDS1 -.->|Multi-AZ| RDS2
+    
+    BTask1 -.->|Pull Image| ECR
+    BTask2 -.->|Pull Image| ECR
+    FTask1 -.->|Pull Image| ECR
+    FTask2 -.->|Pull Image| ECR
+    
+    ECSControl -.->|Manages| BackendService
+    ECSControl -.->|Manages| FrontendService
+    
+    style VPC fill:#e3f2fd
+    style ECS_Cluster fill:#f1f8e9
+    style AZ1 fill:#fff3e0
+    style AZ2 fill:#fff3e0
+    style PubSub1 fill:#c8e6c9
+    style PubSub2 fill:#c8e6c9
+    style PrivSub1 fill:#ffcdd2
+    style PrivSub2 fill:#ffcdd2
+    style External fill:#f3e5f5
 ```
+
+### ECS Task Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Provisioning: ECS Service Created
+    Provisioning --> Pending: Task Definition Ready
+    Pending --> Running: Container Started
+    Running --> Healthy: Health Check Passed
+    Healthy --> Running: Serving Traffic
+    Running --> Stopping: Scale Down / Update
+    Running --> Stopped: Task Failed
+    Stopped --> Provisioning: Auto-Restart
+    Stopping --> Stopped
+    Stopped --> [*]
+    
+    note right of Healthy
+        ALB routes traffic only
+        to healthy tasks
+    end note
+```
+
+### Traffic Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant ALB
+    participant Fargate Backend
+    participant Fargate Frontend
+    participant RDS
+    participant ECR
+    participant ECS Control
+    
+    Note over ECS Control,ECR: Task Initialization
+    ECS Control->>ECR: Pull task images
+    ECR-->>ECS Control: backend:latest, frontend:latest
+    ECS Control->>Fargate Backend: Start tasks (IPs: 10.0.1.x)
+    ECS Control->>Fargate Frontend: Start tasks (IPs: 10.0.1.y)
+    
+    Note over User,RDS: User Requests
+    User->>ALB: GET / (Port 80)
+    ALB->>Fargate Frontend: Route to Task IP:80
+    Fargate Frontend-->>User: Return HTML
+    
+    User->>ALB: GET /api/messages
+    ALB->>Fargate Backend: Route to Task IP:8080
+    Fargate Backend->>RDS: Query:5432
+    RDS-->>Fargate Backend: Data
+    Fargate Backend-->>User: JSON response
+```
+
+**Key ECS Fargate Concepts:**
+
+• **Serverless Containers**: No EC2 instances to manage
+• **Task Definition**: Blueprint specifying image, CPU, memory, environment variables
+• **Service**: Maintains desired task count, integrates with ALB
+• **ENI**: Each task gets its own private IP in VPC
+• **Target Type IP**: ALB routes directly to task IPs (not EC2 instance IPs)
+• **Auto-Scaling**: Based on CPU, memory, or custom CloudWatch metrics
 
 ### Detailed Architecture with ECS Fargate and VPC
 ```
