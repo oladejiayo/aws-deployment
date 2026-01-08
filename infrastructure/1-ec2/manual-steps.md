@@ -280,7 +280,7 @@ sequenceDiagram
 ### Option A: EC2 Frontend
 
 | Resource | Type | Monthly Cost |
-|----------|------|--------------||
+|----------|------|--------------|
 | EC2 Backend | t3.micro | ~$8.50 |
 | EC2 Frontend | t3.micro | ~$8.50 |
 | RDS PostgreSQL | db.t3.micro | ~$13 |
@@ -290,7 +290,7 @@ sequenceDiagram
 ### Option B: S3 + CloudFront Frontend
 
 | Resource | Type | Monthly Cost |
-|----------|------|--------------||
+|----------|------|--------------|
 | EC2 Backend | t3.micro | ~$8.50 |
 | S3 Storage | Standard | ~$0.50 (for 20GB) |
 | S3 Requests | GET/PUT | ~$0.05 (10k requests) |
